@@ -7,6 +7,15 @@ license:             MIT
 author:              myuon
 maintainer:          ioi.joi.koi.loi@gmail.com
 category:            Web
+
+default-extensions:
+- Strict
+- StrictData
+
+ghc-options:
+- -threaded
+- -O1
+
 extra-source-files:
 - README.md
 
@@ -20,6 +29,12 @@ dependencies:
   - lens
   - text
   - bytestring
+  - ansi-wl-pprint
+  - rainbow
+  - optparse-applicative
+  - directory
+  - time
+  - syb
 
 executables:
   dandan:

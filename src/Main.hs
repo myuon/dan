@@ -1,19 +1,20 @@
+{-# LANGUAGE TemplateHaskell #-}
+{-# LANGUAGE TypeApplications #-}
+{-# LANGUAGE LambdaCase #-}
 {-# LANGUAGE OverloadedStrings #-}
 module Main where
 
-import Control.Lens
-import Control.Monad.IO.Class
+import Control.Lens hiding ((.=), argument)
 import Data.Aeson
 import Data.Aeson.Lens
-import Network.Google as Google
-import Network.Google.Auth
-import Network.Google.AppsCalendar as Calendar
 import System.IO
-import System.Environment
 import qualified Data.ByteString.Lazy as BS
-import qualified Data.Text as T
-import qualified Data.Text.IO as T
+import Options.Applicative
+import System.Directory
+import Data.Time
+import Data.Semigroup ((<>))
 
+{-
 loadTokenFile :: FilePath -> (Credentials s -> IO ()) -> IO (Credentials s)
 loadTokenFile path sav = go . decode =<< BS.readFile path where
   go json = do
@@ -43,5 +44,74 @@ main = do
     liftIO $ print p
     
   putStrLn "hello world"
+-}
 
+data DanItem
+  = DanItem
+  { _doneAt :: UTCTime
+  , _itemName :: String
+  } deriving (Eq, Show)
 
+makeLenses ''DanItem
+
+instance ToJSON DanItem where
+  toJSON (DanItem d i) = object ["done_at" .= d, "item_name" .= i]
+
+instance FromJSON DanItem where
+  parseJSON (Object v) = DanItem <$> (v .: "done_at") <*> (v .: "item_name")
+
+danDir = "dan"
+jsonFile = "201808.json"
+jsonPath = danDir ++ "/" ++ jsonFile
+
+main = do
+  createDirectoryIfMissing True danDir
+
+  j <- doesFileExist jsonPath >>= \case
+    True -> BS.readFile jsonPath
+    False -> return "[]"
+  parseOptions >>= execDan ((\(Just s) -> s) $ decode @[DanItem] j)
+
+data DanOption
+  = DAdd String (Either String ())
+  | DList Bool
+  deriving (Eq, Show)
+
+execDan :: [DanItem] -> DanOption -> IO ()
+execDan j (DAdd name (Right ())) = do
+  time <- getCurrentTime
+  BS.writeFile jsonPath $ encode (DanItem time name : j)
+execDan j (DAdd name (Left ftime)) = do
+  let time = parseTimeOrError True defaultTimeLocale "%Y-%m-%d" ftime
+  BS.writeFile jsonPath $ encode (DanItem time name : j)
+    
+parseOptions :: IO DanOption
+parseOptions = execParser opts where
+  opts = info (danParser <**> helper) $
+    fullDesc
+    <> progDesc "`DONE` management tool"
+    <> header "dan - `DONE` management tool"
+
+  danParser :: Parser DanOption
+  danParser = subparser
+    $ command "add" (info padd $ progDesc "Add a new `DONE` item")
+    <> command "list" (info plist $ progDesc "List current jobs")
+
+    where
+      padd = DAdd
+        <$> argument str (metavar "ITEM_NAME")
+        <*> (fmap Left pdate <|> pure (Right ()))
+
+        where
+          pdate = strOption
+            $ long "date"
+            <> short 'd'
+            <> help "When have you done this?"
+            <> metavar "YYYY-MM-DD"
+
+      plist = fmap DList $ switch
+        $ long "list"
+        <> short 'l'
+        <> help "List current jobs"
+
+  
