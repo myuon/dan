@@ -1,4 +1,4 @@
-name:                dandan
+name:                dan
 version:             0.1.0.0
 #synopsis:
 #description:
@@ -40,6 +40,6 @@ dependencies:
   - monad-logger
 
 executables:
-  dandan:
+  dan:
     source-dirs:      src
     main:             Main.hs
