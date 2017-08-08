@@ -67,21 +67,21 @@ main = do
   parseOptions >>= execDan
 
 data DanOption
-  = DAdd String (Either String ())
+  = DAdd String (Either String ()) String
   | DList
   | DGitLog FilePath
   | DGraph
   deriving (Eq, Show)
 
 execDan :: DanOption -> IO ()
-execDan (DAdd n t) = do
+execDan (DAdd n t c) = do
   time <- either (return . parseTimeOrError True defaultTimeLocale "%Y-%m-%d") (\_ -> getCurrentTime) t
   job <- case n of
     ('#':nid) -> do
       jobs <- runDB $ selectList [] []
       return $ (\(Entity k _) -> k) $ jobs !! read nid
     _ -> fetchJobId (DanJob (T.pack n))
-  runDB $ insert_ $ DanItem job time ""
+  runDB $ insert_ $ DanItem job time (T.pack c)
 execDan DList = do
   jobs <- runDB $ selectList [] [] :: IO [Entity DanJob]
   putStrLn "== registered jobs =="
@@ -135,6 +135,7 @@ parseOptions = execParser opts where
       padd = DAdd
         <$> argument str (metavar "ITEM_NAME")
         <*> (fmap Left pdate <|> pure (Right ()))
+        <*> strOption (long "comment" <> short 'c' <> metavar "COMMENT")
 
         where
           pdate = strOption
