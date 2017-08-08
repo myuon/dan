@@ -1,3 +1,4 @@
+{-# LANGUAGE FlexibleContexts #-}
 {-# LANGUAGE GeneralizedNewtypeDeriving #-}
 {-# LANGUAGE ExistentialQuantification #-}
 {-# LANGUAGE GADTs #-}
@@ -13,6 +14,9 @@ module Main where
 
 import Control.Lens hiding ((.=), argument)
 import Control.Monad
+import Control.Monad.Reader (ReaderT, MonadIO)
+import Control.Monad.Logger (NoLoggingT)
+import Control.Monad.Trans.Resource (ResourceT, MonadBaseControl)
 import Data.Aeson
 import Data.Aeson.Lens
 import qualified Data.ByteString.Lazy as BS
@@ -44,29 +48,16 @@ danDir = "persist"
 dbFile = "201708.sqlite"
 dbPath = danDir ++ "/" ++ dbFile
 
-fetchJobs :: IO [DanJob]
-fetchJobs = do
-  jobs <- runSqlite @_ @SqlBackend (T.pack dbPath) $ selectList [] []
-  return $ fmap (\(Entity _ u) -> u) jobs
+runDB :: (MonadBaseControl IO m, MonadIO m) => ReaderT SqlBackend (NoLoggingT (ResourceT m)) a -> m a
+runDB = runSqlite (T.pack dbPath)
 
-fetchItems :: IO [DanItem]
-fetchItems = do
-  items <- runSqlite @_ @SqlBackend (T.pack dbPath) $ selectList [] [Desc DanItemDoneAt]
-  return $ fmap (\(Entity _ u) -> u) items
-
-obtainJobId :: DanJob -> IO DanJobId
-obtainJobId job = do
-  runSqlite @_ @SqlBackend (T.pack dbPath) $ do
+fetchJobId :: DanJob -> IO DanJobId
+fetchJobId job = do
+  runDB $ do
     xs <- selectList [DanJobName ==. danJobName job] [LimitTo 1]
     case xs of
       [] -> insert job
       (Entity key _:_) -> return key
-
-insertItem :: DanItem -> IO ()
-insertItem = runSqlite @_ @SqlBackend (T.pack dbPath) . insert_
-
-insertItems :: [DanItem] -> IO ()
-insertItems = runSqlite @_ @SqlBackend (T.pack dbPath) . insertMany_
 
 main = do
   doesPathExist dbPath >>= \b -> when (not b) $ do
@@ -85,17 +76,23 @@ data DanOption
 execDan :: DanOption -> IO ()
 execDan (DAdd n t) = do
   time <- either (return . parseTimeOrError True defaultTimeLocale "%Y-%m-%d") (\_ -> getCurrentTime) t
-  job <- obtainJobId (DanJob (T.pack n))
-  insertItem $ DanItem job time ""
+  job <- case n of
+    ('#':nid) -> do
+      jobs <- runDB $ selectList [] []
+      return $ (\(Entity k _) -> k) $ jobs !! read nid
+    _ -> fetchJobId (DanJob (T.pack n))
+  runDB $ insert_ $ DanItem job time ""
 execDan DList = do
-  mapM_ (BS.putStrLn . encode) =<< fetchJobs
+  jobs <- runDB $ selectList [] [] :: IO [Entity DanJob]
+  putStrLn "== registered jobs =="
+  mapM_ (\(i,v) -> putStrLn $ "#" ++ show i ++ ": " ++ show (encode v)) $ zip [0..] $ fmap (\(Entity _ v) -> v) jobs
 execDan (DGitLog repo) = do
   xs <- readCreateProcess (shell $ "git --git-dir=" ++ repo ++ "/.git log --date=iso --pretty=format:\"%h %cd\" | awk '{print $1\" \"$2}'") ""
-  job <- obtainJobId (DanJob "git-commit")
+  job <- fetchJobId (DanJob "git-commit")
 
-  insertItems $ fmap (\[hash,date] -> DanItem job (parseTimeOrError True defaultTimeLocale "%Y-%m-%d" date) (T.pack hash)) $ fmap words $ lines xs
+  runDB $ insertMany_ $ fmap (\[hash,date] -> DanItem job (parseTimeOrError True defaultTimeLocale "%Y-%m-%d" date) (T.pack hash)) $ fmap words $ lines xs
 execDan DGraph = do
-  ds <- fetchItems
+  ds <- fmap (fmap (\(Entity _ v) -> v)) $ runDB $ selectList [] []
   let mp = foldl (\mp i -> M.insertWith (\_ -> (i :)) (utctDay (danItemDoneAt i)) [i] mp) M.empty ds
 
   mapM_ (\s -> putStrLn $ "|" ++ s ++ "|") =<< densityGraph mp

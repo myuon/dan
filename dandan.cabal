@@ -43,4 +43,7 @@ executable dandan
     , containers
     , split
     , process
+    , mtl
+    , resourcet
+    , monad-logger
   default-language: Haskell2010

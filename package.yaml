@@ -40,6 +40,9 @@ dependencies:
   - containers
   - split
   - process
+  - mtl
+  - resourcet
+  - monad-logger
 
 executables:
   dandan:
