@@ -42,4 +42,5 @@ executable dandan
     , persistent-template
     , containers
     , split
+    , process
   default-language: Haskell2010

@@ -39,6 +39,7 @@ dependencies:
   - persistent-template
   - containers
   - split
+  - process
 
 executables:
   dandan:

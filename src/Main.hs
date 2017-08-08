@@ -20,6 +20,7 @@ import qualified Data.Text as T
 import qualified Data.Map as M
 import Data.List.Split
 import System.IO
+import System.Process
 import Options.Applicative
 import System.Directory
 import Data.Time
@@ -36,6 +37,7 @@ DanJob json
 DanItem json
   job DanJobId
   doneAt UTCTime
+  comment T.Text
 |]
 
 danDir = "persist"
@@ -73,6 +75,7 @@ main = do
 data DanOption
   = DAdd String (Either String ())
   | DList
+  | DGitLog FilePath
   | DNone
   deriving (Eq, Show)
 
@@ -80,9 +83,15 @@ execDan :: DanOption -> IO ()
 execDan (DAdd n t) = do
   time <- either (return . parseTimeOrError True defaultTimeLocale "%Y-%m-%d") (\_ -> getCurrentTime) t
   job <- obtainJobId (DanJob (T.pack n))
-  insertItem $ DanItem job time
+  insertItem $ DanItem job time ""
 execDan DList = do
   mapM_ (print . encode) =<< fetchJobs
+execDan (DGitLog repo) = do
+  xs <- readCreateProcess (shell $ "git --git-dir=" ++ repo ++ "/.git log --date=iso --pretty=format:\"%h %cd\" | awk '{print $1\" \"$2}' | uniq -c -f 1") ""
+  job <- obtainJobId (DanJob "git-commit")
+
+  forM_ (fmap words $ lines xs) $ \[count,hash,date] -> do
+    insertItem $ DanItem job (parseTimeOrError True defaultTimeLocale "%Y-%m-%d" date) (T.pack hash)
 execDan DNone = do
   mapM_ (\s -> putStrLn $ "|" ++ s ++ "|") =<< densityGraph =<< fetchItems
 
@@ -114,6 +123,7 @@ parseOptions = execParser opts where
   danParser = subparser
     ( command "add" (info padd $ progDesc "Add a new `DONE` item")
     <> command "list" (info plist $ progDesc "List current jobs")
+    <> command "load" (info pload $ progDesc "List current jobs")
     )
     <|> pure DNone
 
@@ -131,4 +141,6 @@ parseOptions = execParser opts where
 
       plist = pure DList
 
+      pload = DGitLog
+        <$> strOption (long "git" <> short 'g' <> metavar "GIT_REPO" <> help "Load commits from given git repository")
 
