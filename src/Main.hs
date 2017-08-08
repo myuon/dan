@@ -45,7 +45,7 @@ DanItem json
 |]
 
 danDir = "persist"
-dbFile = "201708.sqlite"
+dbFile = "test.sqlite"
 dbPath = danDir ++ "/" ++ dbFile
 
 runDB :: (MonadBaseControl IO m, MonadIO m) => ReaderT SqlBackend (NoLoggingT (ResourceT m)) a -> m a

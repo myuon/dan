@@ -14,7 +14,7 @@ default-extensions:
 
 ghc-options:
 - -threaded
-- -O1
+- -O2
 
 extra-source-files:
 - README.md
@@ -23,14 +23,9 @@ dependencies:
   - base >= 4.7 && < 5
   - aeson
   - aeson-lens
-  - vty
-  - gogol
-  - gogol-apps-calendar
   - lens
   - text
   - bytestring
-  - ansi-wl-pprint
-  - rainbow
   - optparse-applicative
   - directory
   - time
