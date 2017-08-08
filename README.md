@@ -1,1 +1,4 @@
-# dandan
+# dan
+
+- `dan --help`
+

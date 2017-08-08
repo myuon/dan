@@ -1,5 +1,5 @@
-name:                dandan
-version:             0.1.0.0
+name:                dan
+version:             0.1.0.1
 #synopsis:
 #description:
 homepage:            https://github.com/myuon/dandan#readme
@@ -7,6 +7,15 @@ license:             MIT
 author:              myuon
 maintainer:          ioi.joi.koi.loi@gmail.com
 category:            Web
+
+default-extensions:
+- Strict
+- StrictData
+
+ghc-options:
+- -threaded
+- -O2
+
 extra-source-files:
 - README.md
 
@@ -14,14 +23,23 @@ dependencies:
   - base >= 4.7 && < 5
   - aeson
   - aeson-lens
-  - vty
-  - gogol
-  - gogol-apps-calendar
   - lens
   - text
   - bytestring
+  - optparse-applicative
+  - directory
+  - time
+  - persistent
+  - persistent-sqlite
+  - persistent-template
+  - containers
+  - split
+  - process
+  - mtl
+  - resourcet
+  - monad-logger
 
 executables:
-  dandan:
+  dan:
     source-dirs:      src
     main:             Main.hs
