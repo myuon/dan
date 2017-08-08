@@ -65,6 +65,9 @@ obtainJobId job = do
 insertItem :: DanItem -> IO ()
 insertItem = runSqlite @_ @SqlBackend (T.pack dbPath) . insert_
 
+insertItems :: [DanItem] -> IO ()
+insertItems = runSqlite @_ @SqlBackend (T.pack dbPath) . insertMany_
+
 main = do
   doesPathExist dbPath >>= \b -> when (not b) $ do
     createDirectoryIfMissing True danDir
@@ -76,7 +79,7 @@ data DanOption
   = DAdd String (Either String ())
   | DList
   | DGitLog FilePath
-  | DNone
+  | DGraph
   deriving (Eq, Show)
 
 execDan :: DanOption -> IO ()
@@ -85,23 +88,27 @@ execDan (DAdd n t) = do
   job <- obtainJobId (DanJob (T.pack n))
   insertItem $ DanItem job time ""
 execDan DList = do
-  mapM_ (print . encode) =<< fetchJobs
+  mapM_ (BS.putStrLn . encode) =<< fetchJobs
 execDan (DGitLog repo) = do
-  xs <- readCreateProcess (shell $ "git --git-dir=" ++ repo ++ "/.git log --date=iso --pretty=format:\"%h %cd\" | awk '{print $1\" \"$2}' | uniq -c -f 1") ""
+  xs <- readCreateProcess (shell $ "git --git-dir=" ++ repo ++ "/.git log --date=iso --pretty=format:\"%h %cd\" | awk '{print $1\" \"$2}'") ""
   job <- obtainJobId (DanJob "git-commit")
 
-  forM_ (fmap words $ lines xs) $ \[count,hash,date] -> do
-    insertItem $ DanItem job (parseTimeOrError True defaultTimeLocale "%Y-%m-%d" date) (T.pack hash)
-execDan DNone = do
-  mapM_ (\s -> putStrLn $ "|" ++ s ++ "|") =<< densityGraph =<< fetchItems
-
-densityGraph :: [DanItem] -> IO [String]
-densityGraph ds = do
+  insertItems $ fmap (\[hash,date] -> DanItem job (parseTimeOrError True defaultTimeLocale "%Y-%m-%d" date) (T.pack hash)) $ fmap words $ lines xs
+execDan DGraph = do
+  ds <- fetchItems
   let mp = foldl (\mp i -> M.insertWith (\_ -> (i :)) (utctDay (danItemDoneAt i)) [i] mp) M.empty ds
+
+  mapM_ (\s -> putStrLn $ "|" ++ s ++ "|") =<< densityGraph mp
+
+  putStrLn "\n== latest commits =="
+  mapM_ (BS.putStrLn . encode) $ take 10 $ concat $ reverse $ M.elems mp
+  
+densityGraph :: M.Map Day [DanItem] -> IO [String]
+densityGraph mp = do
   let maxDensity = maximum $ M.elems $ fmap length mp
   cur <- getCurrentTime
 
-  forM (chunksOf 30 [addDays (-300) (utctDay cur) .. utctDay cur]) $ \days -> do
+  forM (chunksOf 30 [addDays (-100) (utctDay cur) .. utctDay cur]) $ \days -> do
     forM days $ \day -> do
       return $ graphChar (maybe 0 length $ M.lookup day mp) maxDensity
 
@@ -125,7 +132,7 @@ parseOptions = execParser opts where
     <> command "list" (info plist $ progDesc "List current jobs")
     <> command "load" (info pload $ progDesc "List current jobs")
     )
-    <|> pure DNone
+    <|> pure DGraph
 
     where
       padd = DAdd
