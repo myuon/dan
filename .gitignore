@@ -3,4 +3,5 @@
 *.hi
 *.o
 token/
-dan/
+persist/
+./dandan

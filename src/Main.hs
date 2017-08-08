@@ -1,3 +1,10 @@
+{-# LANGUAGE GeneralizedNewtypeDeriving #-}
+{-# LANGUAGE ExistentialQuantification #-}
+{-# LANGUAGE GADTs #-}
+{-# LANGUAGE TypeFamilies #-}
+{-# LANGUAGE MultiParamTypeClasses #-}
+{-# LANGUAGE FlexibleInstances #-}
+{-# LANGUAGE QuasiQuotes #-}
 {-# LANGUAGE TemplateHaskell #-}
 {-# LANGUAGE TypeApplications #-}
 {-# LANGUAGE LambdaCase #-}
@@ -5,86 +12,97 @@
 module Main where
 
 import Control.Lens hiding ((.=), argument)
+import Control.Monad
 import Data.Aeson
 import Data.Aeson.Lens
-import System.IO
 import qualified Data.ByteString.Lazy as BS
+import qualified Data.Text as T
+import qualified Data.Map as M
+import Data.List.Split
+import System.IO
 import Options.Applicative
 import System.Directory
 import Data.Time
 import Data.Semigroup ((<>))
+import Database.Persist
+import Database.Persist.Sql
+import Database.Persist.TH
+import Database.Persist.Sqlite
 
-{-
-loadTokenFile :: FilePath -> (Credentials s -> IO ()) -> IO (Credentials s)
-loadTokenFile path sav = go . decode =<< BS.readFile path where
-  go json = do
-    let cli = OAuthClient (json ^. key "client_id" ^?! _Just) (json ^. key "client_secret" ^?! _Just)
-    T.putStrLn $ formURL cli calendarScope
-    code <- OAuthCode <$> T.getLine
-    let cred = installedApplication cli code
-    sav cred
-    return cred
+share [mkPersist sqlSettings, mkMigrate "migrateAll"] [persistLowerCase|
+DanJob json
+  name T.Text
 
-main :: IO ()
-main = do
-  lgr <- newLogger Debug stdout
-  mgr <- newManager tlsManagerSettings
-  args <- getArgs
-  let clientJSONpath = "token/client.json"
-  let userJSONpath = "token/test.json"
-  
-  cred <- case args of
-    ("auth":_) -> loadTokenFile clientJSONpath (\cred -> saveAuthorizedUser userJSONpath True . (\(Right r) -> r) =<< fmap authToAuthorizedUser . retrieveAuthFromStore =<< initStore cred lgr mgr)
-    _ -> fromFilePath userJSONpath
-    
-  env <- newEnvWith cred lgr mgr <&> envScopes .~ calendarScope
+DanItem json
+  job DanJobId
+  doneAt UTCTime
+|]
 
-  runResourceT . runGoogle env $ timeout (Seconds 3600) $ do
-    p <- send calendarListList
-    liftIO $ print p
-    
-  putStrLn "hello world"
--}
+danDir = "persist"
+dbFile = "201708.sqlite"
+dbPath = danDir ++ "/" ++ dbFile
 
-data DanItem
-  = DanItem
-  { _doneAt :: UTCTime
-  , _itemName :: String
-  } deriving (Eq, Show)
+fetchJobs :: IO [DanJob]
+fetchJobs = do
+  jobs <- runSqlite @_ @SqlBackend (T.pack dbPath) $ selectList [] []
+  return $ fmap (\(Entity _ u) -> u) jobs
 
-makeLenses ''DanItem
+fetchItems :: IO [DanItem]
+fetchItems = do
+  items <- runSqlite @_ @SqlBackend (T.pack dbPath) $ selectList [] [Desc DanItemDoneAt]
+  return $ fmap (\(Entity _ u) -> u) items
 
-instance ToJSON DanItem where
-  toJSON (DanItem d i) = object ["done_at" .= d, "item_name" .= i]
+obtainJobId :: DanJob -> IO DanJobId
+obtainJobId job = do
+  runSqlite @_ @SqlBackend (T.pack dbPath) $ do
+    xs <- selectList [DanJobName ==. danJobName job] [LimitTo 1]
+    case xs of
+      [] -> insert job
+      (Entity key _:_) -> return key
 
-instance FromJSON DanItem where
-  parseJSON (Object v) = DanItem <$> (v .: "done_at") <*> (v .: "item_name")
-
-danDir = "dan"
-jsonFile = "201808.json"
-jsonPath = danDir ++ "/" ++ jsonFile
+insertItem :: DanItem -> IO ()
+insertItem = runSqlite @_ @SqlBackend (T.pack dbPath) . insert_
 
 main = do
-  createDirectoryIfMissing True danDir
+  doesPathExist dbPath >>= \b -> when (not b) $ do
+    createDirectoryIfMissing True danDir
+    runSqlite (T.pack dbPath) $ runMigration migrateAll
 
-  j <- doesFileExist jsonPath >>= \case
-    True -> BS.readFile jsonPath
-    False -> return "[]"
-  parseOptions >>= execDan ((\(Just s) -> s) $ decode @[DanItem] j)
+  parseOptions >>= execDan
 
 data DanOption
   = DAdd String (Either String ())
-  | DList Bool
+  | DList
+  | DNone
   deriving (Eq, Show)
 
-execDan :: [DanItem] -> DanOption -> IO ()
-execDan j (DAdd name (Right ())) = do
-  time <- getCurrentTime
-  BS.writeFile jsonPath $ encode (DanItem time name : j)
-execDan j (DAdd name (Left ftime)) = do
-  let time = parseTimeOrError True defaultTimeLocale "%Y-%m-%d" ftime
-  BS.writeFile jsonPath $ encode (DanItem time name : j)
-    
+execDan :: DanOption -> IO ()
+execDan (DAdd n t) = do
+  time <- either (return . parseTimeOrError True defaultTimeLocale "%Y-%m-%d") (\_ -> getCurrentTime) t
+  job <- obtainJobId (DanJob (T.pack n))
+  insertItem $ DanItem job time
+execDan DList = do
+  mapM_ (print . encode) =<< fetchJobs
+execDan DNone = do
+  mapM_ (\s -> putStrLn $ "|" ++ s ++ "|") =<< densityGraph =<< fetchItems
+
+densityGraph :: [DanItem] -> IO [String]
+densityGraph ds = do
+  let mp = foldl (\mp i -> M.insertWith (\_ -> (i :)) (utctDay (danItemDoneAt i)) [i] mp) M.empty ds
+  let maxDensity = maximum $ M.elems $ fmap length mp
+  cur <- getCurrentTime
+
+  forM (chunksOf 30 [addDays (-300) (utctDay cur) .. utctDay cur]) $ \days -> do
+    forM days $ \day -> do
+      return $ graphChar (maybe 0 length $ M.lookup day mp) maxDensity
+
+  where
+    graphChar :: Int -> Int -> Char
+    graphChar i maxi | 0 == i = ' '
+    graphChar i maxi | 0 < i && i <= maxi `div` 3 = '░'
+    graphChar i maxi | maxi `div` 3 < i && i <= (maxi `div` 3) * 2 = '▒'
+    graphChar i maxi | (maxi `div` 3) * 2 < i = '▓'
+
 parseOptions :: IO DanOption
 parseOptions = execParser opts where
   opts = info (danParser <**> helper) $
@@ -94,8 +112,10 @@ parseOptions = execParser opts where
 
   danParser :: Parser DanOption
   danParser = subparser
-    $ command "add" (info padd $ progDesc "Add a new `DONE` item")
+    ( command "add" (info padd $ progDesc "Add a new `DONE` item")
     <> command "list" (info plist $ progDesc "List current jobs")
+    )
+    <|> pure DNone
 
     where
       padd = DAdd
@@ -109,9 +129,6 @@ parseOptions = execParser opts where
             <> help "When have you done this?"
             <> metavar "YYYY-MM-DD"
 
-      plist = fmap DList $ switch
-        $ long "list"
-        <> short 'l'
-        <> help "List current jobs"
+      plist = pure DList
 
-  
+

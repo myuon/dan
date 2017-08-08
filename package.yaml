@@ -34,7 +34,11 @@ dependencies:
   - optparse-applicative
   - directory
   - time
-  - syb
+  - persistent
+  - persistent-sqlite
+  - persistent-template
+  - containers
+  - split
 
 executables:
   dandan:
