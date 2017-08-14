@@ -135,7 +135,7 @@ parseOptions = execParser opts where
       padd = DAdd
         <$> argument str (metavar "ITEM_NAME")
         <*> (fmap Left pdate <|> pure (Right ()))
-        <*> strOption (long "comment" <> short 'c' <> metavar "COMMENT")
+        <*> (strOption (long "comment" <> short 'c' <> metavar "COMMENT") <|> pure "")
 
         where
           pdate = strOption
